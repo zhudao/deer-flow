@@ -112,6 +112,16 @@ export const zhCN: Translations = {
     followupConfirmAppend: "追加并发送",
     followupConfirmReplace: "替换并发送",
     suggestionPlaceholderRequired: "发送前请先填写建议模板中的占位内容。",
+    goalCommandDescription: "设置、查看或清除当前目标",
+    goalLabel: "目标",
+    goalContinuing: "续跑中 {count}/{max}",
+    goalContinuationTooltip:
+      "为达成目标已自动续跑 {count}/{max} 次，达上限后自动停止",
+    goalSet: "目标已设置。",
+    goalCleared: "目标已清除。",
+    goalNone: "当前没有目标。",
+    goalActive: "当前目标：{goal}",
+    goalFailed: "目标命令执行失败。",
     suggestions: [
       {
         suggestion: "写作",
@@ -170,6 +180,7 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
+    agentsDisabledTooltip: "功能未启用",
   },
 
   // Agents
@@ -179,6 +190,8 @@ export const zhCN: Translations = {
     newAgent: "新建智能体",
     emptyTitle: "还没有自定义智能体",
     emptyDescription: "创建你的第一个自定义智能体，设置专属系统提示词。",
+    featureDisabledTitle: "智能体功能未启用",
+    featureDisabledDescription: "该功能未在此服务器上启用，请联系管理员。",
     chat: "对话",
     delete: "删除",
     deleteConfirm: "确定要删除该智能体吗？此操作不可撤销。",
@@ -503,6 +516,8 @@ export const zhCN: Translations = {
       emptyDescription:
         "将你的 Agent Skill 文件夹放在 DeerFlow 根目录下的 `/skills/custom` 文件夹中。",
       emptyButton: "创建你的第一个技能",
+      adminRequired: "需要管理员权限才能管理 Agent Skill。",
+      installAdminRequired: "需要管理员权限才能安装 Agent Skill。",
     },
     notification: {
       title: "通知",

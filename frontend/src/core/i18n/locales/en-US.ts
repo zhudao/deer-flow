@@ -118,6 +118,16 @@ export const enUS: Translations = {
     followupConfirmReplace: "Replace & send",
     suggestionPlaceholderRequired:
       "Replace the suggestion placeholder before sending.",
+    goalCommandDescription: "Set, show, or clear an active goal",
+    goalLabel: "Goal",
+    goalContinuing: "Continuing {count}/{max}",
+    goalContinuationTooltip:
+      "Auto-continued {count}/{max} times toward the goal; stops at the limit.",
+    goalSet: "Goal set.",
+    goalCleared: "Goal cleared.",
+    goalNone: "No active goal.",
+    goalActive: "Active goal: {goal}",
+    goalFailed: "Goal command failed.",
     suggestions: [
       {
         suggestion: "Write",
@@ -177,6 +187,7 @@ export const enUS: Translations = {
     recentChats: "Recent chats",
     demoChats: "Demo chats",
     agents: "Agents",
+    agentsDisabledTooltip: "Feature not enabled",
   },
 
   // Agents
@@ -188,6 +199,9 @@ export const enUS: Translations = {
     emptyTitle: "No custom agents yet",
     emptyDescription:
       "Create your first custom agent with a specialized system prompt.",
+    featureDisabledTitle: "Agents feature is not enabled",
+    featureDisabledDescription:
+      "This feature is not enabled on this server. Please contact your administrator.",
     chat: "Chat",
     delete: "Delete",
     deleteConfirm:
@@ -525,6 +539,9 @@ export const enUS: Translations = {
       emptyDescription:
         "Put your agent skill folders under the `/skills/custom` folder under the root folder of DeerFlow.",
       emptyButton: "Create Your First Skill",
+      adminRequired: "Admin privileges are required to manage agent skills.",
+      installAdminRequired:
+        "Admin privileges are required to install agent skills.",
     },
     notification: {
       title: "Notification",

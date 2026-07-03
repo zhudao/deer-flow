@@ -95,6 +95,15 @@ export interface Translations {
     followupConfirmAppend: string;
     followupConfirmReplace: string;
     suggestionPlaceholderRequired: string;
+    goalCommandDescription: string;
+    goalLabel: string;
+    goalContinuing: string;
+    goalContinuationTooltip: string;
+    goalSet: string;
+    goalCleared: string;
+    goalNone: string;
+    goalActive: string;
+    goalFailed: string;
     suggestions: {
       suggestion: string;
       prompt: string;
@@ -119,6 +128,7 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
+    agentsDisabledTooltip: string;
     channels: string;
   };
 
@@ -129,6 +139,8 @@ export interface Translations {
     newAgent: string;
     emptyTitle: string;
     emptyDescription: string;
+    featureDisabledTitle: string;
+    featureDisabledDescription: string;
     chat: string;
     delete: string;
     deleteConfirm: string;
@@ -431,6 +443,8 @@ export interface Translations {
       emptyTitle: string;
       emptyDescription: string;
       emptyButton: string;
+      adminRequired: string;
+      installAdminRequired: string;
     };
     notification: {
       title: string;
