@@ -143,8 +143,9 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     middlewares = build_subagent_runtime_middlewares(app_config=app_config, lazy_init=False)
 
     assert captured["app_config"] is app_config
-    # 8 baseline (InputSanitization, ToolOutputBudget, ThreadData, Sandbox,
-    # DanglingToolCall, LLMErrorHandling, SandboxAudit, ToolErrorHandling)
+    # 9 baseline (InputSanitization, ToolOutputBudget, ToolResultSanitization,
+    # ThreadData, Sandbox, DanglingToolCall, LLMErrorHandling, SandboxAudit,
+    # ToolErrorHandling)
     # + 1 ReadBeforeWriteMiddleware + 1 LoopDetectionMiddleware
     # + 1 TokenBudgetMiddleware (subagents.token_budget enabled by default, #3875 Phase 2)
     # + 1 SafetyFinishReasonMiddleware (all enabled by default).
@@ -152,7 +153,7 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     from deerflow.agents.middlewares.token_budget_middleware import TokenBudgetMiddleware
     from deerflow.agents.middlewares.tool_output_budget_middleware import ToolOutputBudgetMiddleware
 
-    assert len(middlewares) == 12
+    assert len(middlewares) == 13
     assert isinstance(middlewares[0], FakeMiddleware)  # InputSanitizationMiddleware stub
     assert isinstance(middlewares[1], ToolOutputBudgetMiddleware)
     assert any(isinstance(m, ToolErrorHandlingMiddleware) for m in middlewares)
@@ -545,6 +546,23 @@ def test_subagent_runtime_middlewares_attach_deferred_filter_when_setup_has_name
     filter_idx = next(i for i, m in enumerate(middlewares) if isinstance(m, DeferredToolFilterMiddleware))
     safety_idx = next(i for i, m in enumerate(middlewares) if isinstance(m, SafetyFinishReasonMiddleware))
     assert filter_idx < safety_idx
+
+
+def test_subagent_runtime_middlewares_place_mcp_routing_before_deferred_filter(monkeypatch):
+    from deerflow.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
+    from deerflow.agents.middlewares.mcp_routing_middleware import McpRoutingMiddleware
+    from deerflow.tools.builtins.tool_search import DeferredToolSetup
+
+    app_config = _make_app_config()
+    _stub_runtime_middleware_imports(monkeypatch)
+    routing = McpRoutingMiddleware({"mcp_thing": {"priority": 100, "keywords": ["orders"]}}, "hash123", 3)
+    setup = DeferredToolSetup(object(), frozenset({"mcp_thing"}), "hash123")
+
+    middlewares = build_subagent_runtime_middlewares(app_config=app_config, deferred_setup=setup, mcp_routing_middleware=routing)
+
+    routing_idx = next(i for i, middleware in enumerate(middlewares) if isinstance(middleware, McpRoutingMiddleware))
+    filter_idx = next(i for i, middleware in enumerate(middlewares) if isinstance(middleware, DeferredToolFilterMiddleware))
+    assert routing_idx < filter_idx
 
 
 def test_subagent_runtime_middlewares_skip_deferred_filter_without_names(monkeypatch):

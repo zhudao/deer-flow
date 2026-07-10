@@ -163,14 +163,22 @@ def _build_runtime_middlewares(
     from deerflow.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
     from deerflow.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
     from deerflow.agents.middlewares.tool_output_budget_middleware import ToolOutputBudgetMiddleware
+    from deerflow.agents.middlewares.tool_result_sanitization_middleware import ToolResultSanitizationMiddleware
     from deerflow.sandbox.middleware import SandboxMiddleware
 
     # Layer 1 — outermost wrap_model_call wrappers (listed outer→inner).
     # InputSanitizationMiddleware is first so it becomes the outermost
     # wrapper — sanitised messages are what every inner middleware sees.
+    # ToolResultSanitizationMiddleware mirrors that guardrail for the other
+    # untrusted-content entry point: remote tool results (web_fetch /
+    # web_search) get the same framework/injection-tag neutralization. It sits
+    # inner of ToolOutputBudgetMiddleware (listed after it) so it neutralizes
+    # the raw tool output first; the budget wrapper then truncates the already
+    # neutralized text.
     outer_wrappers: list[AgentMiddleware] = [
         InputSanitizationMiddleware(),
         ToolOutputBudgetMiddleware.from_app_config(app_config),
+        ToolResultSanitizationMiddleware(),
     ]
 
     # Layer 2 — before_agent hooks that read/annotate thread-scoped data.
@@ -272,6 +280,7 @@ def build_subagent_runtime_middlewares(
     model_name: str | None = None,
     lazy_init: bool = True,
     deferred_setup: "DeferredToolSetup | None" = None,
+    mcp_routing_middleware: AgentMiddleware | None = None,
     agent_name: str | None = None,
 ) -> list[AgentMiddleware]:
     """Middlewares shared by subagent runtime before subagent-only middlewares."""
@@ -296,6 +305,9 @@ def build_subagent_runtime_middlewares(
 
         middlewares.append(ViewImageMiddleware())
 
+    if mcp_routing_middleware is not None:
+        middlewares.append(mcp_routing_middleware)
+
     # Hide deferred (MCP) tool schemas from the subagent's model binding until
     # tool_search promotes them. This is the same wiring the lead agent gets. The deferred
     # set + catalog hash come from the build-time setup (assembled after
@@ -305,6 +317,9 @@ def build_subagent_runtime_middlewares(
         from deerflow.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
 
         middlewares.append(DeferredToolFilterMiddleware(deferred_setup.deferred_names, deferred_setup.catalog_hash))
+        from deerflow.agents.middlewares.mcp_routing_middleware import assert_mcp_routing_before_deferred_filter
+
+        assert_mcp_routing_before_deferred_filter(middlewares)
 
     # LoopDetectionMiddleware — subagents inherit none of the lead's runaway
     # guards today (see #3875): with no loop detection a degenerate subagent tool

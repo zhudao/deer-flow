@@ -437,13 +437,25 @@ class SubagentExecutor:
 
         # Reuse shared middleware composition with lead agent. ``agent_name``
         # lets the builder resolve the per-agent token_budget override.
-        middlewares = build_subagent_runtime_middlewares(
-            app_config=app_config,
-            model_name=self.model_name,
-            lazy_init=True,
-            deferred_setup=deferred_setup,
-            agent_name=self.config.name,
-        )
+        mcp_routing_middleware = None
+        if deferred_setup is not None and deferred_setup.deferred_names:
+            from deerflow.tools.builtins.tool_search import build_mcp_routing_middleware
+
+            mcp_routing_middleware = build_mcp_routing_middleware(
+                tools if tools is not None else self.tools,
+                deferred_setup,
+                top_k=app_config.tool_search.auto_promote_top_k,
+            )
+        middleware_kwargs = {
+            "app_config": app_config,
+            "model_name": self.model_name,
+            "lazy_init": True,
+            "deferred_setup": deferred_setup,
+            "agent_name": self.config.name,
+        }
+        if mcp_routing_middleware is not None:
+            middleware_kwargs["mcp_routing_middleware"] = mcp_routing_middleware
+        middlewares = build_subagent_runtime_middlewares(**middleware_kwargs)
         # Collect every guard middleware that exposes ``consume_stop_reason``
         # (TokenBudgetMiddleware, LoopDetectionMiddleware) so _aexecute can read
         # each after the run and surface whichever cap fired. Duck-typed
@@ -559,7 +571,7 @@ class SubagentExecutor:
         # Lazy import: see the TYPE_CHECKING note at the top of this module -
         # importing tool_search runs tools/builtins/__init__, which would
         # re-enter this package during its own initialization.
-        from deerflow.tools.builtins.tool_search import assemble_deferred_tools, get_deferred_tools_prompt_section
+        from deerflow.tools.builtins.tool_search import assemble_deferred_tools, get_deferred_tools_prompt_section, get_mcp_routing_hints_prompt_section
 
         # Load skills as conversation items (Codex pattern)
         skills = await self._load_skills()
@@ -587,6 +599,9 @@ class SubagentExecutor:
         deferred_section = get_deferred_tools_prompt_section(deferred_names=deferred_setup.deferred_names)
         if deferred_section:
             system_parts.append(deferred_section)
+        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(filtered_tools, deferred_names=deferred_setup.deferred_names)
+        if mcp_routing_hints_section:
+            system_parts.append(mcp_routing_hints_section)
 
         messages: list[Any] = []
         if system_parts:

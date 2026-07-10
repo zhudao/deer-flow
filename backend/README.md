@@ -317,6 +317,26 @@ MCP servers and skill states in a single file:
         "client_id": "$MCP_OAUTH_CLIENT_ID",
         "client_secret": "$MCP_OAUTH_CLIENT_SECRET"
       }
+    },
+    "postgres": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+      "description": "PostgreSQL database access",
+      "routing": {
+        "mode": "prefer",
+        "priority": 50,
+        "keywords": ["orders", "users", "SQL", "database", "table"]
+      },
+      "tools": {
+        "query": {
+          "routing": {
+            "priority": 100,
+            "keywords": ["query database", "orders table", "metrics"]
+          }
+        }
+      }
     }
   },
   "skills": {
@@ -324,6 +344,12 @@ MCP servers and skill states in a single file:
   }
 }
 ```
+
+`routing` adds soft MCP preference hints to the agent prompt. It helps the
+model prefer a configured MCP tool for matching requests without forbidding
+other tools. When `tool_search.enabled=true` defers MCP schemas, matching
+routing metadata can auto-promote up to `tool_search.auto_promote_top_k`
+deferred schemas before the model call.
 
 ### Environment Variables
 
