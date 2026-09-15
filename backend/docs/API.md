@@ -349,17 +349,50 @@ The tool rechecks source ownership on each read; foreign, deleted and unowned
 legacy threads are unavailable. `read_conversation(thread_id, cursor?, limit?)`
 reads newest-first pages (messages within each page are chronological), at most
 50 visible user/assistant messages, 4,000 characters per message and 20,000 text
-characters per page. Results include message IDs, sequence numbers, continuation,
-truncation and unavailability. Truncated message suffixes are not retrievable in
-this first version. Hidden messages, reasoning blocks, raw tool results and
-subagent internals are excluded. Source data is not changed.
+characters per page. Each page also stays within the tool-output budget that
+applies to `read_conversation` (`tool_output.tool_overrides.read_conversation`,
+else `externalize_min_chars`, and `fallback_max_chars`; 12,000 serialized
+characters by default), so results reach the model inline instead of being
+externalized to a file. A message that does not fit starts the next page intact.
+Only a message longer than 4,000 characters, or one whose serialized form alone
+exceeds the budget, is truncated. Such a message carries
+`continuation: {"message_seq", "offset"}`; `read_conversation(thread_id,
+message_seq=..., offset=...)` without a cursor returns the next part of that one
+message (at most 20,000 text characters, sized to the same budget) with its
+`offset`, `text_length` and, while text remains, a new continuation. Offsets
+refer to the source's current text: an offset past its end returns
+`invalid_request`, and a message that is no longer visible is unavailable. If the
+`read_conversation` budget is too small to return any text (below roughly 800
+serialized characters), the result is `output_budget_too_small` rather than a
+continuation that makes no progress.
+Results include message IDs, sequence numbers, continuation, truncation and
+unavailability. Hidden messages, reasoning blocks, raw tool
+results and subagent internals are excluded. Source data is not changed.
 
-References authorize only this run, including its internal continuation steps.
+**Live reads and retained copies.** Each call reads the source's current visible
+history. Editing or regenerating the source can change subsequent reads, including
+later pages; a reference does not pin an immutable transcript. Text already returned
+to the destination is a copy and is not automatically refreshed by source changes.
+
+Read permission lasts only for this run, including its internal continuation steps.
 Every new run, including resume, regenerate or edit replay, must submit references
 again; checkpoints and old hints never restore permission. A resume can reuse
 IDs already visible in the interrupted conversation, but needs the explicit
 request field again. Missing/expired transcripts are not reconstructed from
 checkpoints or memory.
+
+Permission expiry does not erase excerpts already stored in the destination
+conversation or conclusions derived from them. Deleting the source does not
+retroactively erase those copies either; they follow the destination's own
+retention and deletion behavior. Once the source is unavailable, further source
+reads report unavailability rather than reconstructing it from destination copies.
+
+**Incomplete requirements.** When `truncated` is true, the tool's notice tells
+the agent to read the rest through each cut message's continuation before relying
+on it, and to acknowledge the omission and request the missing material if that
+read is unavailable. `has_more: false` means there are no older messages to page
+through, not that every returned message is complete. This is model guidance, not
+a new confirmation mechanism or a guarantee of model compliance.
 
 This first version adds no frontend picker or link-to-reference conversion. The
 tool is unavailable to bootstrap agents, subagents and embedded clients without
