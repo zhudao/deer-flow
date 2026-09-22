@@ -62,6 +62,7 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
     - [Running the Application](#running-the-application)
       - [Deployment Sizing](#deployment-sizing)
       - [Option 1: Docker (Recommended)](#option-1-docker-recommended)
+      - [Upgrading an existing checkout](#upgrading-an-existing-checkout)
       - [Option 2: Local Development](#option-2-local-development)
     - [Advanced](#advanced)
       - [Sandbox Mode](#sandbox-mode)
@@ -383,6 +384,8 @@ Existing valid JSONL records remain readable without rewriting the files.
 
 The unified nginx endpoint is same-origin by default and does not emit browser CORS headers. If you run a split-origin or port-forwarded browser client, set `GATEWAY_CORS_ORIGINS` to comma-separated exact origins such as `http://localhost:3000`; the Gateway then applies the CORS allowlist and matching CSRF origin checks.
 
+When fine-grained authorization is enabled, Live Browser connections require `threads:write` as well as ownership of the thread, even when only viewing frames: the same connection can control the browser. Permission checks run when connecting. Restart Gateway after upgrading to disconnect sessions admitted by older code.
+
 Browser login uses `HttpOnly` session cookies. The login page offers a "keep me signed in" option that extends the browser session when the request is HTTPS (including trusted `X-Forwarded-Proto: https`) or localhost HTTP. The localhost exception uses the direct request `Host` and ignores forwarded host headers. Public HTTP deployments, including many temporary sandbox URLs, fall back to session cookies by default. DeerFlow never stores the password in browser storage; the UI may remember only the email address.
 
 DeerFlow still uses `Forwarded` / `X-Forwarded-*` headers to recover the browser-facing scheme and origin behind a proxy. The bundled nginx sets `X-Forwarded-Proto`, but preserves an upstream HTTPS value and does not overwrite every forwarded header. Configure the outer trusted proxy to replace or strip client-supplied forwarding headers before traffic reaches DeerFlow.
@@ -403,6 +406,15 @@ DeerFlow still uses `Forwarded` / `X-Forwarded-*` headers to recover the browser
 > Reconciliation uses an atomic takeover claim that re-checks the lease after candidate selection, so a successful owner renewal wins over orphan recovery and only one reconciler can report a run as recovered. When multiple Gateway workers share the Docker/AIO or E2B sandbox backend, also configure `sandbox.ownership.type: redis`; E2B uses the leases during background startup and periodic reconciliation so duplicate/orphan cleanup cannot terminate a live peer's sandbox.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed Docker development guide.
+
+#### Upgrading an existing checkout
+
+Keep `config.yaml`, `.env`, and `extensions_config.json`. Stop the services you
+currently use, run `git pull --ff-only`, then start the same mode again. Do not run
+`make config` or `make docker-init` again for a routine source upgrade. If the new
+version requires configuration changes, run `make config-upgrade` before restarting.
+See [Operations and Troubleshooting](frontend/src/content/en/application/operations-and-troubleshooting.mdx#upgrading-an-existing-checkout)
+for the commands for each mode.
 
 #### Option 2: Local Development
 
@@ -1623,6 +1635,8 @@ Each task gets its own execution environment with a full filesystem view — ski
 
 The built-in `grep` tool searches either one text file or all matching text files below a directory, so an agent can search an uploaded document directly without first broadening the request to the entire uploads directory.
 
+Remote `ls` excludes ignored descendants before applying its 500-entry listing limit, so dependency and build trees do not crowd out visible files. Explicitly listing an ignored directory still lists its contents; normal depth and output limits remain in effect.
+
 Uploaded Markdown outlines recognize ATX heading syntax, clean closing markers with a linear suffix scan, and skip fenced code examples, so hashtags and code comments do not
 crowd out real document sections from the agent's heading preview.
 UTF-8 Markdown files with or without a byte-order mark (BOM) produce the same
@@ -1847,6 +1861,12 @@ DeerFlow is model-agnostic — it works with any LLM that implements the OpenAI-
 - **Strong tool-use** for reliable function calling and structured outputs
 
 ## Embedded Python Client
+
+For `DeerFlowClient(agent_name="researcher")`, the named agent's `mcp_plugins`
+selection applies to both the lead agent and its `task` / `batch_task`
+delegations: `null` inherits all enabled MCP plugins, `[]` selects none, and
+installation IDs select only those plugins. Call `client.reset_agent()` after
+editing the saved agent configuration to refresh the selection.
 
 `DeerFlowClient.stream()` includes `summary_text` in each `values` event. This is the current compacted context summary, or `None` when absent. Consumers can record changes without reading checkpoint internals; repeated snapshots may carry the same summary, and an initial snapshot may already contain one from an earlier turn.
 
@@ -2089,6 +2109,40 @@ environment variables that would evaluate arbitrary code. That is defense in
 depth, not a boundary: these launchers exist to fetch and run remote packages,
 so **treat Gateway admin as equivalent to code execution on the host** and grant
 it accordingly.
+
+### External Chat Message Roles
+
+Gateway run requests and manual thread-state updates reject client-supplied
+`system` / `developer` messages with HTTP 400, including equivalent serialized
+message forms. Ordinary chat, attachments, and assistant/tool history replay
+remain supported. Session or PAT authentication does not grant system-prompt
+authority; trusted internal run producers retain that ability.
+
+This check prevents new role injection; it does not rewrite existing
+checkpoints. If an older version accepted an injected system message, use a
+fresh thread or have an operator review and clean the affected state. Restarting
+the service does not remove persisted instructions, and restoring an older
+checkpoint can restore them.
+
+For local verification, run `python backend/tests/poc_external_system_message_injection.py --help`.
+The same opt-in PoC supports `--expect vulnerable` on an isolated old revision
+and `--expect blocked` after the fix. Its help includes PAT creation, thread-ID
+selection, browser follow-up, and the distinction between persistence and model
+obedience. Use a fresh disposable thread for each run; the test appends messages.
+
+On an isolated unfixed checkout, `--expect vulnerable` demonstrates acceptance
+only when the request returns 200 and the exact injected message remains in the
+checkpoint as `type=system` across a normal follow-up. A marker in a web answer
+is model-dependent and is not evidence by itself that the role was promoted.
+After applying the fix, run the same script with `--expect blocked`: it requires
+the specific role-rejection 400, an unchanged checkpoint, a successful ordinary
+follow-up, and absence of the rejected message IDs. Other 400 responses and
+authentication, conflict, or server errors are inconclusive rather than passes.
+
+The PoC does not clean up automatically. When verification is complete, delete
+the disposable chat with the web sidebar's delete action and revoke the
+short-lived PAT if one was created. Restarting the service does not remove a
+persisted injected instruction.
 
 ### Deployment Defaults
 
