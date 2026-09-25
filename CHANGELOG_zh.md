@@ -727,6 +727,17 @@
 
 ### 修复
 
+- **调度器：** 在 SQLite 上，调度分发进行中暂停计划任务时不再丢失暂停状态。
+  `release_dispatch_lease` 依据租约持有者做校验（暂停会清除该字段），但读取任务行时没有先获取
+  SQLite 的写锁，因此过期的读取会通过校验，并把任务状态写回 `enabled` 且不改动 `next_run_at`，
+  导致接口已回复“已暂停”的任务仍被继续触发。现在该读取会像该仓储中其他写入路径一样先获取写锁。
+  PostgreSQL 不受影响。([#5777])
+- **mcp：** MCP 延迟初始化在工具发现本身抛出 `RuntimeError`（例如
+  `McpTaskConfigurationError`）时，不再把发现流程跑两遍。`get_cached_mcp_tools()` 里的
+  `asyncio.run` 兜底只为 `get_event_loop()` 失败而设，却同时捕获了发现阶段的错误，于是在
+  放弃之前会重新拉起每一个 stdio 服务器（并重新获取 OAuth 令牌）；在运行中的事件循环里，
+  它记录的还是误导性的 "asyncio.run() cannot be called from a running event loop"
+  堆栈，而不是真正的原因。
 - **上传：** 删除已上传的文档时，不再连带删除其旁边转换生成的 Markdown。转换以文档主干名
   命名配套文件，名称被占用时回退为 `_N` 后缀，因此文档旁的 `.md` 可能属于主干名相同的另一个
   文档，或属于用户自己：上传 `a.docx` 与 `a.pdf` 会生成 `a.md` 与 `a_1.md`，删除 `a.pdf`
@@ -2095,6 +2106,11 @@
 
 ### 安全
 
+- **认证：** `POST /api/v1/auth/initialize` 不再让两个并发的首次初始化请求都创建 admin。
+  此前处理器在一个会话中统计 admin 数量、在另一个会话中创建账号，因此两个使用不同邮箱的请求
+  会同时看到空系统；现在失败方会返回文档所述的 `409 system_already_initialized`。统计与插入现在
+  在同一事务内完成，并先对写入串行化（SQLite 用 `BEGIN IMMEDIATE`，PostgreSQL 用
+  advisory lock）。([#5776])
 - **上传：** 文档转换不再按文件名重新打开上传文件。此前 Gateway 转换的是已提交的文件，嵌入式
   客户端转换的是刚放入线程 uploads 目录的副本，因此沙箱若在此期间把该文件名替换为符号链接，
   宿主文件的内容就会被转换成该线程的 `.md` 配套文件。现在 Gateway 通过自己写入时持有的文件
@@ -2236,6 +2252,11 @@
   插件章节，涵盖 `registry.plugin()`、浏览器模块与打包资源、后端动作、模型工具和
   设置；新增请求级运行证据读取器及按用户的路由示例；补充插件的排查与运维说明。同时
   修正 `docs/full-stack-plugins.md` 中插件 `mount` 返回值的描述。
+- **文档：** 新增中英文检查点存储手册（`harness/checkpoints/`），覆盖 `full` 与
+  `delta` 两种通道模式：概念、快速上手、模式标记与失败关闭门禁、快照节奏、delta
+  历史缓存、恢复与回滚的线性化、运维与保留约束、可观测性、按症状排查，以及列出全部
+  配置键、错误信息和已固定上游缺陷的参考章节。该章节为新增目录而非页面重构，原有
+  检查点相关文档保持不变。
 
 ### 内部改进
 
@@ -3549,3 +3570,5 @@ DeerFlow 2.0 是围绕"超级智能体"框架的彻底重写，核心包含子�
 [#5611]: https://github.com/bytedance/deer-flow/pull/5611
 [#5673]: https://github.com/bytedance/deer-flow/pull/5673
 [#5734]: https://github.com/bytedance/deer-flow/pull/5734
+[#5776]: https://github.com/bytedance/deer-flow/pull/5776
+[#5777]: https://github.com/bytedance/deer-flow/pull/5777
