@@ -20,7 +20,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 52
+config_version: 53
 
 # Optional operator-owned literal prompt extensions (see CONFIGURATION.md):
 # lead_prompt_overlay:
@@ -2755,6 +2755,27 @@ mcp_tasks:
   result_preview_max_chars: 2000
 
 # ============================================================================
+# Deployment Topology
+# ============================================================================
+# Declare whether more than one Gateway instance shares this database.
+#
+# GATEWAY_WORKERS / WEB_CONCURRENCY only count the uvicorn workers of one
+# process tree, so a Kubernetes Deployment with replicas > 1 (one worker per
+# Pod) is invisible to the startup safety gate. Without this declaration each
+# Pod passes every check, and its startup orphan reconciliation writes the
+# other Pods' lease-less runs off as crashed on every rolling update.
+#
+# With multi_instance: true (or the environment variable
+# DEER_FLOW_MULTI_INSTANCE=1, which deploy tooling such as a Helm chart can
+# set from its replica count) startup requires database.backend: postgres, run_events.backend: db,
+# run_ownership.heartbeat_enabled: true and a Redis stream bridge, and refuses
+# an explicit sandbox.ownership.type: memory, process-local browser tools, and
+# scheduler.enabled: true without scheduler.multi_instance: true.
+# Restart required; apply the same value to every instance.
+deployment:
+  multi_instance: false
+
+# ============================================================================
 # Run Ownership Configuration
 # ============================================================================
 # Controls cross-process run ownership for multi-worker deployments.
@@ -3018,9 +3039,15 @@ run_ownership:
 #   discord:
 #     enabled: false
 #     bot_token: $DISCORD_BOT_TOKEN
-#     allowed_guilds: []              # empty = allow all guilds; can also be a single guild ID
+#     # Allowed guild IDs: one positive numeric ID (quoted or unquoted) or a YAML list.
+#     # Unset, null, [], or a blank string allows all guilds.
+#     # Invalid entries are ignored with a warning. Any other configured value
+#     # with no valid ID denies every guild and logs an error.
+#     allowed_guilds: []
 #     mention_only: false             # If true, only respond when the bot is mentioned
-#     allowed_channels: []              # Optional: channel IDs exempt from mention_only (bot responds without mention)
+#     # Channel IDs exempt from mention_only: one ID (quoted or unquoted) or a YAML list.
+#     # Empty = no exemptions; mention_only applies to every channel when enabled.
+#     allowed_channels: []
 #     thread_mode: false               # If true, group a channel conversation into a thread
 #
 #   # Buzz (https://github.com/block/buzz) — Nostr-relay team workspace.
