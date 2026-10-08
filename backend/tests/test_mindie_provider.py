@@ -2,6 +2,8 @@
 Unit tests for MindIEChatModel adapter.
 """
 
+import html
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +14,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from deerflow.agents.middlewares.input_sanitization_middleware import InputSanitizationMiddleware
 from deerflow.models.mindie_provider import (
     MindIEChatModel,
+    _decode_escaped_newlines_outside_fences,
     _fix_messages,
     _parse_xml_tool_call_to_dict,
 )
@@ -410,6 +413,41 @@ class TestParseXmlToolCalls:
         _, calls = _parse_xml_tool_call_to_dict(content)
         assert calls[0]["args"]["bad"] == "{broken json"
 
+    @pytest.mark.parametrize(
+        ("raw_value", "expected"),
+        [
+            (r"first line\nsecond line", "first line\nsecond line"),
+            (r"echo first\necho second", "echo first\necho second"),
+            ("before\\n```python\nprint('a\\nb')\n```\\nafter", "before\n```python\nprint('a\\nb')\n```\nafter"),
+            (r"{broken json\nnext line", "{broken json\nnext line"),
+            ("first<&>\nsecond", "first<&>\nsecond"),
+        ],
+        ids=["multiline-file", "multiline-command", "fenced-code", "malformed-json", "existing-newline-and-entities"],
+    )
+    def test_raw_string_parameters_keep_multiline_compatibility(self, raw_value, expected):
+        encoded = html.escape(raw_value, quote=False)
+        content = f"<tool_call><function=write><parameter=content>{encoded}</parameter></function></tool_call>"
+
+        _, calls = _parse_xml_tool_call_to_dict(content)
+
+        assert calls[0]["args"]["content"] == expected
+
+    def test_python_literal_argument_preserves_its_own_escape_semantics(self):
+        raw_value = r"{'text': 'first\nsecond', 'literal': r'first\nsecond'}"
+        content = f"<tool_call><function=process><parameter=data>{raw_value}</parameter></function></tool_call>"
+
+        _, calls = _parse_xml_tool_call_to_dict(content)
+
+        assert calls[0]["args"]["data"] == {"text": "first\nsecond", "literal": r"first\nsecond"}
+
+    @pytest.mark.parametrize("raw_value", [r'{"n":1e400,"text":"first\nsecond"}', r"{'n':1e400,'text':'first\nsecond'}"])
+    def test_rejected_numeric_containers_keep_escaped_newlines(self, raw_value):
+        content = f"<tool_call><function=process><parameter=data>{raw_value}</parameter></function></tool_call>"
+
+        _, calls = _parse_xml_tool_call_to_dict(content)
+
+        assert calls[0]["args"]["data"] == raw_value
+
     def test_non_string_input_returned_as_is(self):
         result = _parse_xml_tool_call_to_dict(None)
         assert result == (None, [])
@@ -459,6 +497,99 @@ class TestPatchResult:
         assert msg.content == ""
         assert len(msg.tool_calls) == 1
         assert msg.tool_calls[0]["name"] == "calc"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"text": "line1\nline2"},
+            {"text": r"line1\nline2"},
+            {"items": ["line1\nline2", {"text": "<&>\nend"}]},
+            ["line1\nline2", r"literal\n"],
+        ],
+        ids=["object-newline", "literal-backslash", "nested-object", "array"],
+    )
+    def test_xml_json_arguments_preserve_escapes(self, value):
+        encoded = html.escape(json.dumps(value), quote=False)
+        content = f"before\\n<tool_call><function=process><parameter=data>{encoded}</parameter></function></tool_call>\\nafter"
+
+        msg = self._model()._patch_result_with_tools(_make_chat_result(content)).generations[0].message
+
+        assert msg.tool_calls[0]["args"]["data"] == value
+        assert msg.content == "before\n\nafter"
+
+    def test_multiple_xml_calls_preserve_payloads_and_native_calls(self):
+        value = {"text": "line1\nline2"}
+        raw_text = r"first line\nsecond line"
+        content = f"<tool_call><function=process><parameter=data>{json.dumps(value)}</parameter></function></tool_call><tool_call><function=write><parameter=content>{raw_text}</parameter></function></tool_call>"
+        native = {"name": "native", "args": {"text": r"a\nb"}, "id": "native-id"}
+
+        msg = self._model()._patch_result_with_tools(_make_chat_result(content, tool_calls=[native])).generations[0].message
+
+        assert msg.tool_calls[0] == native
+        assert msg.tool_calls[1]["args"] == {"data": value}
+        assert msg.tool_calls[2]["args"] == {"content": "first line\nsecond line"}
+        assert msg.content == ""
+
+    def test_unparseable_xml_keeps_content_and_newline_compatibility(self):
+        content = "before\\n<tool_call>not a function</tool_call>\\nafter"
+
+        msg = self._model()._patch_result_with_tools(_make_chat_result(content)).generations[0].message
+
+        assert msg.content == "before\n<tool_call>not a function</tool_call>\nafter"
+        assert msg.tool_calls == []
+
+    def test_xml_call_keeps_surrounding_escaped_whitespace_trimmed(self):
+        content = "\\n<tool_call><function=process><parameter=data>{}</parameter></function></tool_call>\\n"
+
+        msg = self._model()._patch_result_with_tools(_make_chat_result(content)).generations[0].message
+
+        assert msg.content == ""
+        assert msg.tool_calls[0]["args"]["data"] == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["sync", "async", "tool-stream"])
+    async def test_generation_paths_preserve_xml_json_arguments(self, mode):
+        value = {"text": "line1\nline2"}
+        content = f"<tool_call><function=process><parameter=data>{json.dumps(value)}</parameter></function></tool_call>"
+        result = _make_chat_result(content)
+        model = self._model()
+        messages = [HumanMessage(content="process the data")]
+
+        if mode == "sync":
+            with patch("deerflow.models.mindie_provider.ChatOpenAI._generate", return_value=result):
+                calls = model._generate(messages).generations[0].message.tool_calls
+        else:
+            with patch("deerflow.models.mindie_provider.ChatOpenAI._agenerate", new_callable=AsyncMock, return_value=result):
+                if mode == "async":
+                    calls = (await model._agenerate(messages)).generations[0].message.tool_calls
+                else:
+                    chunks = [chunk async for chunk in model._astream(messages, tools=[{"name": "process"}])]
+                    calls = [call for chunk in chunks for call in chunk.message.tool_calls]
+
+        assert len(calls) == 1
+        assert calls[0]["args"]["data"] == value
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["sync", "async", "tool-stream"])
+    async def test_generation_paths_restore_multiline_raw_parameters(self, mode):
+        content = r"<tool_call><function=write><parameter=content>first line\nsecond line</parameter></function></tool_call>"
+        result = _make_chat_result(content)
+        model = self._model()
+        messages = [HumanMessage(content="write a two-line file")]
+
+        if mode == "sync":
+            with patch("deerflow.models.mindie_provider.ChatOpenAI._generate", return_value=result):
+                calls = model._generate(messages).generations[0].message.tool_calls
+        else:
+            with patch("deerflow.models.mindie_provider.ChatOpenAI._agenerate", new_callable=AsyncMock, return_value=result):
+                if mode == "async":
+                    calls = (await model._agenerate(messages)).generations[0].message.tool_calls
+                else:
+                    chunks = [chunk async for chunk in model._astream(messages, tools=[{"name": "write"}])]
+                    calls = [call for chunk in chunks for call in chunk.message.tool_calls]
+
+        assert len(calls) == 1
+        assert calls[0]["args"] == {"content": "first line\nsecond line"}
 
     def test_patch_result_appends_to_existing_tool_calls(self):
         model = self._model()
@@ -607,6 +738,90 @@ class TestAStream:
             chunks = await self._collect(model._astream([HumanMessage(content="x")]))
 
         assert chunks[0].message.content == "a\nb"
+
+    @pytest.mark.asyncio
+    async def test_no_tools_stream_keeps_escaped_newlines_inside_fences(self):
+        """A fence spanning several chunks must still protect its literal `\\n`.
+
+        The one-shot decode needs a complete ```...``` pair to tell fenced code
+        from prose; a token-sized chunk almost never contains both delimiters,
+        so decoding each chunk independently rewrote code like print("a\\nb")
+        into a real newline mid-stream. The joined stream must match the
+        non-streaming decode of the same reply.
+        """
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.outputs import ChatGenerationChunk
+
+        raw_chunks = ['intro\\n```python\\nprint("a\\nb")', "\\n```\\noutro\\nend"]
+
+        async def fake_stream(*args, **kwargs):
+            for text in raw_chunks:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=text))
+
+        with patch("deerflow.models.mindie_provider.ChatOpenAI._astream", side_effect=fake_stream), patch.object(MindIEChatModel, "__init__", return_value=None):
+            model = MindIEChatModel.__new__(MindIEChatModel)
+            chunks = await self._collect(model._astream([HumanMessage(content="write example code")]))
+
+        streamed = "".join(c.message.content for c in chunks)
+
+        # Code inside the fence keeps its literal backslash-n; prose outside decodes.
+        assert 'print("a\\nb")' in streamed
+        assert streamed.endswith("outro\nend")
+        assert streamed == _decode_escaped_newlines_outside_fences("".join(raw_chunks))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_chunks",
+        [
+            # One chunk carries a complete fence pair: already decodable alone.
+            ["a\\n```py\\nx\\ny```\\nb"],
+            # Fence opens and closes across chunk boundaries.
+            ['intro\\n```python\\nprint("a\\nb")', "\\n```\\noutro\\nend"],
+            # Escape sequence split across the chunk boundary, outside any fence.
+            ["outside\\", "ncode"],
+            # Fence delimiter itself split across the chunk boundary.
+            ["text\\n``", "`python\\nx\\ny", "\\n```\\nend"],
+            # Two fences with prose between them, escaped prose still decodes.
+            ["```a\\n1```\\nmid\\n```b\\n2", "```\\ntail\\nend"],
+        ],
+        ids=["single-chunk-fence", "fence-spans-chunks", "escape-split-across-chunks", "fence-delimiter-split", "two-fences"],
+    )
+    async def test_no_tools_stream_decode_matches_non_streaming(self, raw_chunks):
+        """The joined native stream equals the one-shot decode of the full reply."""
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.outputs import ChatGenerationChunk
+
+        async def fake_stream(*args, **kwargs):
+            for text in raw_chunks:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=text))
+
+        with patch("deerflow.models.mindie_provider.ChatOpenAI._astream", side_effect=fake_stream), patch.object(MindIEChatModel, "__init__", return_value=None):
+            model = MindIEChatModel.__new__(MindIEChatModel)
+            chunks = await self._collect(model._astream([HumanMessage(content="q")]))
+
+        streamed = "".join(c.message.content for c in chunks)
+
+        assert streamed == _decode_escaped_newlines_outside_fences("".join(raw_chunks))
+
+    @pytest.mark.asyncio
+    async def test_no_tools_stream_flushes_trailing_partial_fences(self):
+        """Text held back for a partial ```/`\\n` at stream end is not dropped."""
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.outputs import ChatGenerationChunk
+
+        raw_chunks = ["plain\\ntext", "``"]
+
+        async def fake_stream(*args, **kwargs):
+            for text in raw_chunks:
+                yield ChatGenerationChunk(message=AIMessageChunk(content=text))
+
+        with patch("deerflow.models.mindie_provider.ChatOpenAI._astream", side_effect=fake_stream), patch.object(MindIEChatModel, "__init__", return_value=None):
+            model = MindIEChatModel.__new__(MindIEChatModel)
+            chunks = await self._collect(model._astream([HumanMessage(content="q")]))
+
+        streamed = "".join(c.message.content for c in chunks)
+
+        assert streamed == _decode_escaped_newlines_outside_fences("".join(raw_chunks))
 
     @pytest.mark.asyncio
     async def test_with_tools_fake_streams_text_in_chunks(self):
