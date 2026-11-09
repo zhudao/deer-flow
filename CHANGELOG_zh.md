@@ -26,6 +26,22 @@
 
 ### 修复
 
+- **网关：** 删除线程时不再在对话仍可读取的情况下返回成功。此前
+  `DELETE /api/threads/{id}` 在检查点存储失败时只记录 DEBUG 日志，仍删除线程元数据行并
+  返回成功；之后任何已登录用户都能通过 `GET /threads/{id}`、`/state`、`/history` 和
+  `/goal` 读取残留的标题和消息，所有者也无法重试。现在删除会返回 500 并保留线程，所有者
+  可以再次删除。([#7992])
+
+- **中间件：** 启用 PII 脱敏时，不含空格的长文本（例如粘贴的十六进制转储）不再让 Gateway
+  卡住。此前邮箱检测器的耗时与这类文本长度呈平方关系，而脱敏会在每次模型调用时重新扫描全部
+  用户消息，因此一次 100 KB 的粘贴会让每次模型调用阻塞所有线程约 6 秒。现在扫描为线性耗时，
+  且脱敏的地址与此前完全相同。([#8006])
+
+- **调度器：** 一个已保存的计划无法再计算的定时任务，不再让其他所有任务停止运行。此前
+  已保存的时区或 cron 表达式失效时（例如升级后时区数据库中缺少该时区，或新版 croniter
+  不再接受该表达式），在调度器轮询中计算其下一次运行时间会抛出异常；其启动租约过期后，
+  之后每次轮询都会在接纳到期任务之前失败。现在该任务会被暂停，并把原因记录为最近错误；
+  在修复计划之前，恢复该任务会提示具体问题。([#7993])
 - **社区工具：** 以换行结尾的搜索或抓取 API 密钥不再泄露到对话中。GroundRoute
   （`GROUNDROUTE_API_KEY`）、InfoQuest、Tavily、Exa、Jina、Firecrawl、fastCRW 和
   Crawl4AI 此前把读取到的密钥原样写入 HTTP 请求头；从文件读取的密钥（例如用
@@ -333,6 +349,13 @@
   选择器缺失、是目录或不可读时会在调用 Docker 之前直接失败，而文件删除后
   `make down` 仍能停止整个栈；不设置或为空的选择器保持可选的仓库根 `.env`
   默认值。([#6522])
+- **HITL：** 可选的高风险工具调用人工审批。`hitl_approval.tools`（由宿主管理）通过
+  LangGraph `interrupt()` 暂停匹配的调用，运行进入 `waiting_for_input`，Web UI 展示
+  带逐字段参数摘要的审批卡片。批准后执行调用；拒绝则不执行，并将原因返回给模型。
+  IM 渠道、GitHub 运行和定时任务遵循 `hitl_approval.non_interactive`（默认 `deny`，
+  可选 `allow`）。子代理及不支持 resume 的运行环境无论该设置如何，始终拒绝匹配的
+  调用。`hitl_approval.max_actions` 配置审批批次的调用数量上限（默认 32，0 表示关闭）。
+  默认关闭；`config_version` 65。
 
 - **MCP：** 按未变更的服务器缓存完成包装的工具，仅在绑定对账后重新发现缺失或配置
   发生变化的服务器。将成功但未发现工具的结果与发现失败分开保存，并保留代际、共享
@@ -12811,3 +12834,6 @@ DeerFlow 2.0 是围绕"超级智能体"框架的彻底重写，核心包含子�
 [#7953]: https://github.com/bytedance/deer-flow/issues/7953
 [#7958]: https://github.com/bytedance/deer-flow/pull/7958
 [#7981]: https://github.com/bytedance/deer-flow/pull/7981
+[#7992]: https://github.com/bytedance/deer-flow/pull/7992
+[#7993]: https://github.com/bytedance/deer-flow/pull/7993
+[#8006]: https://github.com/bytedance/deer-flow/pull/8006
